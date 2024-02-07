@@ -30,6 +30,13 @@ Our model only depends on the following commonly used packages, all of which can
 | scipy        | *not specified* (we used 1.6.2)  |
 | scikit-learn | *not specified* (we used 0.24.2) |
 
+```bash
+# install pytorch (get command from https://pytorch.org/get-started/locally/)
+pip install torch torchvision torchaudio
+# install additional packages
+pip install h5py tqdm tensorboard numpy scipy scikit-learn
+```
+
 ## About the EMD Metric
 
 We have removed the EMD module due to GPU compatability issues. The legacy code can be found on the `emd-cd` branch.
