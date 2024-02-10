@@ -2,7 +2,7 @@ import types
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from anode.models import ODENet
 
 class CouplingLayer(nn.Module):
 
@@ -72,7 +72,10 @@ class SequentialFlow(nn.Module):
             return x, logpx
 
 
-def build_latent_flow(args):
+def build_anode_latent_flow(args, augment_dim=16):
+    return ODENet(args.device, args.latent_dim, args.latent_flow_hidden_dim, augment_dim=augment_dim)
+
+def build_discrete_latent_flow(args):
     chain = []
     for i in range(args.latent_flow_depth):
         chain.append(CouplingLayer(args.latent_dim, args.latent_flow_hidden_dim, swap=(i % 2 == 0)))

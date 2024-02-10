@@ -13,7 +13,7 @@ class FlowVAE(Module):
         super().__init__()
         self.args = args
         self.encoder = PointNetEncoder(args.latent_dim)
-        self.flow = build_latent_flow(args)
+        self.flow = build_anode_latent_flow(args)
         self.diffusion = DiffusionPoint(
             net = PointwiseNet(point_dim=3, context_dim=args.latent_dim, residual=args.residual),
             var_sched = VarianceSchedule(
