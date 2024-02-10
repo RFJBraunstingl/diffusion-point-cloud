@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from anode.models import ODENet
 
+
 class CouplingLayer(nn.Module):
 
     def __init__(self, d, intermediate_dim, swap=False):
@@ -73,7 +74,9 @@ class SequentialFlow(nn.Module):
 
 
 def build_anode_latent_flow(args, augment_dim=16):
-    return ODENet(args.device, args.latent_dim, args.latent_flow_hidden_dim, augment_dim=augment_dim)
+    chain = [ODENet(args.device, args.latent_dim, args.latent_flow_hidden_dim, augment_dim=augment_dim)]
+    return SequentialFlow(chain)
+
 
 def build_discrete_latent_flow(args):
     chain = []
@@ -108,7 +111,7 @@ class SpectralNorm(object):
         weight_mat = weight
         if self.dim != 0:
             # permute dim to front
-            weight_mat = weight_mat.permute(self.dim, * [d for d in range(weight_mat.dim()) if d != self.dim])
+            weight_mat = weight_mat.permute(self.dim, *[d for d in range(weight_mat.dim()) if d != self.dim])
         height = weight_mat.size(0)
         weight_mat = weight_mat.reshape(height, -1)
         with torch.no_grad():
@@ -251,10 +254,8 @@ def add_spectral_norm(model, logger=None):
 
 
 def spectral_norm_power_iteration(model, n_power_iterations=1):
-
     def recursive_power_iteration(module):
         if hasattr(module, POWER_ITERATION_FN):
             getattr(module, POWER_ITERATION_FN)(n_power_iterations)
 
     model.apply(recursive_power_iteration)
-
