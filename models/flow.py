@@ -74,8 +74,7 @@ class SequentialFlow(nn.Module):
 
 
 def build_anode_latent_flow(args, augment_dim=16):
-    chain = [ODENet(args.device, args.latent_dim, args.latent_flow_hidden_dim, augment_dim=augment_dim)]
-    return SequentialFlow(chain)
+    return ODENet(args.device, args.latent_dim, args.latent_flow_hidden_dim, augment_dim=augment_dim)
 
 
 def build_discrete_latent_flow(args):
