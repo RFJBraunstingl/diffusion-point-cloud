@@ -1,10 +1,8 @@
 import os
+import time
 import math
 import argparse
 import torch
-import torch.utils.tensorboard
-from torch.utils.data import DataLoader
-from torch.nn.utils import clip_grad_norm_
 from tqdm.auto import tqdm
 
 from utils.dataset import *
@@ -15,111 +13,78 @@ from models.vae_flow import *
 from models.flow import add_spectral_norm, spectral_norm_power_iteration
 from evaluation import *
 
+def normalize_point_clouds(pcs, mode, logger):
+    if mode is None:
+        logger.info('Will not normalize point clouds.')
+        return pcs
+    logger.info('Normalization mode: %s' % mode)
+    for i in tqdm(range(pcs.size(0)), desc='Normalize'):
+        pc = pcs[i]
+        if mode == 'shape_unit':
+            shift = pc.mean(dim=0).reshape(1, 3)
+            scale = pc.flatten().std().reshape(1, 1)
+        elif mode == 'shape_bbox':
+            pc_max, _ = pc.max(dim=0, keepdim=True) # (1, 3)
+            pc_min, _ = pc.min(dim=0, keepdim=True) # (1, 3)
+            shift = ((pc_min + pc_max) / 2).view(1, 3)
+            scale = (pc_max - pc_min).max().reshape(1, 1) / 2
+        pc = (pc - shift) / scale
+        pcs[i] = pc
+    return pcs
+
+
 # Arguments
 parser = argparse.ArgumentParser()
-# Model arguments
-parser.add_argument('--model', type=str, default='flow', choices=['flow', 'gaussian'])
-parser.add_argument('--latent_dim', type=int, default=256)
-parser.add_argument('--num_steps', type=int, default=100)
-parser.add_argument('--beta_1', type=float, default=1e-4)
-parser.add_argument('--beta_T', type=float, default=0.02)
-parser.add_argument('--sched_mode', type=str, default='linear')
-parser.add_argument('--flexibility', type=float, default=0.0)
-parser.add_argument('--truncate_std', type=float, default=2.0)
-parser.add_argument('--latent_flow_depth', type=int, default=14)
-parser.add_argument('--latent_flow_hidden_dim', type=int, default=256)
-parser.add_argument('--num_samples', type=int, default=4)
-parser.add_argument('--sample_num_points', type=int, default=2048)
-parser.add_argument('--kl_weight', type=float, default=0.001)
-parser.add_argument('--residual', type=eval, default=True, choices=[True, False])
-parser.add_argument('--spectral_norm', type=eval, default=False, choices=[True, False])
-
+parser.add_argument('--ckpt', type=str, default='./pretrained/GEN_airplane.pt')
+parser.add_argument('--categories', type=str_list, default=['airplane'])
+parser.add_argument('--save_dir', type=str, default='./results')
+parser.add_argument('--device', type=str, default='cuda')
 # Datasets and loaders
 parser.add_argument('--dataset_path', type=str, default='./data/shapenet.hdf5')
-parser.add_argument('--categories', type=str_list, default=['airplane'])
-parser.add_argument('--scale_mode', type=str, default='shape_unit')
-parser.add_argument('--train_batch_size', type=int, default=128)
-parser.add_argument('--val_batch_size', type=int, default=64)
-
-# Optimizer and scheduler
-parser.add_argument('--lr', type=float, default=2e-3)
-parser.add_argument('--weight_decay', type=float, default=0)
-parser.add_argument('--max_grad_norm', type=float, default=10)
-parser.add_argument('--end_lr', type=float, default=1e-4)
-parser.add_argument('--sched_start_epoch', type=int, default=200*THOUSAND)
-parser.add_argument('--sched_end_epoch', type=int, default=400*THOUSAND)
-
-# Training
-parser.add_argument('--seed', type=int, default=2020)
-parser.add_argument('--logging', type=eval, default=True, choices=[True, False])
-parser.add_argument('--log_root', type=str, default='./logs_gen')
-parser.add_argument('--device', type=str, default='cuda')
-parser.add_argument('--max_iters', type=int, default=float('inf'))
-parser.add_argument('--val_freq', type=int, default=1000)
-parser.add_argument('--test_freq', type=int, default=30*THOUSAND)
-parser.add_argument('--test_size', type=int, default=400)
-parser.add_argument('--tag', type=str, default=None)
+parser.add_argument('--batch_size', type=int, default=128)
+# Sampling
+parser.add_argument('--sample_num_points', type=int, default=2048)
+parser.add_argument('--normalize', type=str, default='shape_bbox', choices=[None, 'shape_unit', 'shape_bbox'])
+parser.add_argument('--seed', type=int, default=9988)
+# Generation
+parser.add_argument('--num', type=int, default=4000) # number of point clouds to generate
 args = parser.parse_args()
-seed_all(args.seed)
+
 
 # Logging
-if args.logging:
-    log_dir = get_new_log_dir(args.log_root, prefix='GEN_', postfix='_' + args.tag if args.tag is not None else '')
-    logger = get_logger('train', log_dir)
-    writer = torch.utils.tensorboard.SummaryWriter(log_dir)
-    ckpt_mgr = CheckpointManager(log_dir)
-    log_hyperparams(writer, args)
-else:
-    logger = get_logger('train', None)
-    writer = BlackHole()
-    ckpt_mgr = BlackHole()
-logger.info(args)
+save_dir = os.path.join(args.save_dir, 'GEN_Ours_%s_%d' % ('_'.join(args.categories), int(time.time())) )
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir)
+logger = get_logger('test', save_dir)
+for k, v in vars(args).items():
+    logger.info('[ARGS::%s] %s' % (k, repr(v)))
 
-# Datasets and loaders
-logger.info('Loading datasets...')
-
-train_dset = ShapeNetCore(
-    path=args.dataset_path,
-    cates=args.categories,
-    split='train',
-    scale_mode=args.scale_mode,
-)
-print(len(train_dset.pointclouds))  # train split consists of 3438 pointclouds
-train_iter = get_data_iterator(DataLoader(
-    train_dset,
-    batch_size=args.train_batch_size,
-    num_workers=0,
-))
+# Checkpoint
+ckpt = torch.load(args.ckpt, map_location=args.device)
+seed_all(args.seed)
 
 # Model
-logger.info('Building model...')
-if args.model == 'gaussian':
-    model = GaussianVAE(args).to(args.device)
-elif args.model == 'flow':
-    model = FlowVAE(args).to(args.device)
+logger.info('Loading model...')
+if ckpt['args'].model == 'gaussian':
+    model = GaussianVAE(ckpt['args']).to(args.device)
+elif ckpt['args'].model == 'flow':
+    model = FlowVAE(ckpt['args']).to(args.device)
 logger.info(repr(model))
-if args.spectral_norm:
-    add_spectral_norm(model, logger=logger)
+# if ckpt['args'].spectral_norm:
+#     add_spectral_norm(model, logger=logger)
+model.load_state_dict(ckpt['state_dict'])
 
-# Optimizer and scheduler
-optimizer = torch.optim.Adam(model.parameters(),
-                             lr=args.lr,
-                             weight_decay=args.weight_decay
-                             )
-scheduler = get_linear_scheduler(
-    optimizer,
-    start_epoch=args.sched_start_epoch,
-    end_epoch=args.sched_end_epoch,
-    start_lr=args.lr,
-    end_lr=args.end_lr
-)
+# Generate Point Clouds
+gen_pcs = []
+for i in tqdm(range(0, math.ceil(args.num / args.batch_size)), 'Generate'):
+    with torch.no_grad():
+        z = torch.randn([args.batch_size, ckpt['args'].latent_dim]).to(args.device)
+        x = model.sample(z, args.sample_num_points, flexibility=ckpt['args'].flexibility)
+        gen_pcs.append(x.detach().cpu())
+gen_pcs = torch.cat(gen_pcs, dim=0)[:args.num]
+if args.normalize is not None:
+    gen_pcs = normalize_point_clouds(gen_pcs, mode=args.normalize, logger=logger)
 
-# Main loop
-logger.info('Start generating...')
-batch = next(train_iter)
-cnt = 0
-while batch is not None:
-    x = batch['pointcloud'].to(args.device)
-    cnt += 1
-    print(f"process batch {cnt}: " + batch.size())
-    batch = next(train_iter)
+# Save
+logger.info('Saving point clouds...')
+np.save(os.path.join(save_dir, 'out.npy'), gen_pcs.numpy())
