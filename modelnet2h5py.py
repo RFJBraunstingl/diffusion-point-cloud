@@ -10,6 +10,7 @@ category_prefix = 'modelnet40_'
 output_file_path = './data/modelnet40.hdf5'
 val_split_percentage = 25
 dtype = 'f4'
+num_points = 2048
 
 # read shapenet for comparison
 with h5py.File(shapenet_path, mode='r') as f:
@@ -32,11 +33,10 @@ print(modelnet_categories)
 
 def convert_file_to_pc(category, file_name):
     path = os.path.join(modelnet_path, category, file_name)
-    pc = []
     with open(path, 'r') as file:
-        for line in file:
-            point = line.split(',')[0:3]
-            pc.append(point)
+        lines = [line for line in file]
+        selected_lines = np.random.choice(lines, num_points)
+        pc = [line.split(',')[0:3] for line in selected_lines]
 
     as_array = np.array(pc).astype(dtype)
     return as_array
